@@ -203,7 +203,7 @@ function show(tab) {
   S.tab = tab;
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   try {
-    ({ today: drawToday, month: drawMonth, plan: drawPlan, edit: drawEdit })[tab]();
+    ({ today: drawToday, month: drawMonth, plan: drawPlan, activity: drawActivity, edit: drawEdit })[tab]();
   } catch (e) { fail(e); }
   window.scrollTo(0, 0);
 }
@@ -314,12 +314,15 @@ function drawMonth() {
     </div><div class="list">`;
   const days = {};
   d.events.filter(keep).forEach((e, i) => (days[e.date] ||= []).push([e, d.events.indexOf(e)]));
-  const dates = Object.keys(days).sort();
+  const dates = Object.keys(days).sort().reverse();                 // newest day on top
   if (!dates.length) h += `<div class="item muted">Nothing here.</div>`;
+  const future = dates.filter((x) => x > d.today).length;
+  if (future && dates.some((x) => x <= d.today))
+    h = h.replace('<div class="list">', `<button class="chip" id="m-today" style="margin:0 0 8px">↓ Jump to today</button><div class="list">`);
   for (const day of dates) {
-    h += `<div class="dayhead ${day === d.today ? "today" : ""}"><span>${esc(wday(day))}${day === d.today ? " · today" : ""}</span>
+    h += `<div class="dayhead ${day === d.today ? "today" : ""}" data-date="${esc(day)}"><span>${esc(wday(day))}${day === d.today ? " · today" : ""}</span>
       <span>${bal[day] != null ? `end of day ${money(bal[day])}` : ""}</span></div>`;
-    for (const [e, i] of days[day]) {
+    for (const [e, i] of [...days[day]].reverse()) {
       const onCard = e.kind === "card";
       const amt = onCard ? `<span class="muted">${money(-e.card)}</span><div class="small muted">on card</div>`
         : `<b class="${e.amount > 0 ? "pos" : ""}">${money(e.amount, true)}</b>`;
@@ -330,9 +333,10 @@ function drawMonth() {
         <div class="amt">${amt}</div></div>`;
     }
   }
-  h += `</div><p class="muted small" style="padding:0 6px">Blue rows are the plan; white rows already happened.
+  h += `</div><p class="muted small" style="padding:0 6px">Newest on top. Blue rows are the plan; white rows already happened.
     Card purchases don't change your cash until you pay the card.</p>`;
   view.innerHTML = h;
+  if ($("#m-today")) $("#m-today").onclick = () => [...document.querySelectorAll(".dayhead[data-date]")].find((x) => x.dataset.date <= d.today)?.scrollIntoView({ behavior: "smooth", block: "center" });
   $("#m-prev").onclick = () => { S.month = m === 1 ? [y - 1, 12] : [y, m - 1]; drawMonth(); };
   $("#m-next").onclick = () => { S.month = m === 12 ? [y + 1, 1] : [y, m + 1]; drawMonth(); };
   view.querySelectorAll(".chip").forEach((c) => (c.onclick = () => { S.filter = c.dataset.f; drawMonth(); }));
@@ -387,6 +391,90 @@ function drawPlan() {
   view.innerHTML = h;
 }
 
+// ------------------------------------------------------------------ Activity (recent transactions)
+// Same search as the desktop: every term must match. Words: text in the description, merchant, category,
+// bank or account. Amounts: 45.20 exact · 45 = any $45.xx · >500 · <20 · >=100 · 100-200 · $ and commas ok.
+function txMatcher(query) {
+  const tests = [];
+  for (const tok of query.toLowerCase().replace(/,/g, "").split(/\s+/).filter(Boolean)) {
+    const t = tok.replace(/\$/g, "");
+    let m;
+    if ((m = t.match(/^(>=|<=|>|<)(\d+(?:\.\d+)?)$/))) {
+      const op = m[1], x = parseFloat(m[2]);
+      tests.push((a) => ({ ">": a > x, "<": a < x, ">=": a >= x, "<=": a <= x })[op]);
+    } else if ((m = t.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/))) {
+      const [lo, hi] = [parseFloat(m[1]), parseFloat(m[2])].sort((p, q) => p - q);
+      tests.push((a) => lo <= a && a <= hi);
+    } else if (/^\d+\.\d{1,2}$/.test(t)) {
+      const x = parseFloat(t); tests.push((a) => Math.abs(a - x) < 0.005);
+    } else if (/^\d+$/.test(t)) {
+      const x = parseInt(t, 10); tests.push((a, txt) => Math.trunc(a) === x || (tok.length >= 4 && txt.includes(tok)));
+    } else tests.push((a, txt) => txt.includes(tok));
+  }
+  return (amount, text) => tests.every((f) => f(Math.abs(amount), text));
+}
+
+function drawActivity() {
+  S.tx ||= { days: 30, account: "", q: "" };
+  const key = `tx-${S.tx.days}-${S.tx.account}`;
+  const d = S.data[key] || (S.data[key] = call(`M.transactions_json(${S.tx.days}, ${S.tx.account ? pyStr(S.tx.account) : "None"})`));
+  view.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div class="search"><input id="t-q" type="text" enterkeyhint="search" placeholder="Search: costco · 45.20 · >500 · 100-200" value="${esc(S.tx.q)}"
+        autocapitalize="off" autocorrect="off" spellcheck="false"><button id="t-x" aria-label="Clear">✕</button></div>
+      <div class="two" style="margin-top:8px">
+        <select id="t-acc"><option value="">All accounts</option>${d.accounts.map((a) =>
+          `<option value="${esc(a.id)}" ${a.id === S.tx.account ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select>
+        <select id="t-days">${[7, 30, 60, 90, 365].map((n) => `<option value="${n}" ${n === S.tx.days ? "selected" : ""}>Last ${n} days</option>`).join("")}</select>
+      </div>
+      <div class="small muted" id="t-n" style="margin-top:6px"></div>
+    </div>
+    <div class="list" id="t-list"></div>
+    <p class="muted small" style="padding:0 6px">Search: words (costco netflix) and/or amounts: 45.20 exact · 45 = any $45.xx ·
+      >500 · <20 · 100-200. Every term must match. Tap a row for details.</p>`;
+  const list = () => {
+    const q = S.tx.q.trim(), match = q ? txMatcher(q) : null;
+    const rows = d.txs.map((t, i) => [t, i]).filter(([t]) => !match ||
+      match(t.amount, [t.raw, t.desc, t.category, t.bank, t.account].join(" ").toLowerCase()));
+    $("#t-n").textContent = q ? `${rows.length} found` : `${rows.length} transactions`;
+    let h = "", last = null;
+    for (const [t, i] of rows.slice(0, 400)) {
+      if (t.date !== last) { h += `<div class="dayhead"><span>${esc(wday(t.date))}</span></div>`; last = t.date; }
+      const into = t.amount < 0;
+      const after = t.after == null ? "" : t.credit
+        ? (t.after >= 0.005 ? `owes ${cents(t.after)}` : t.after > -0.005 ? "$0.00" : `credit ${cents(-t.after)}`) : cents(t.after);
+      h += `<div class="item tap ${t.thru ? "dim" : ""}" data-i="${i}">
+        <div class="main"><div class="t">${esc(t.desc)}${t.status === "pending" ? ' <span class="badge">pending</span>' : ""}${t.thru ? ' <span class="badge">paid back</span>' : ""}</div>
+          <div class="small muted t">${esc(t.account)}${t.category ? ` · ${esc(t.category)}` : ""}</div></div>
+        <div class="amt"><b class="${into ? "pos" : ""}">${into ? "+" : ""}${cents(Math.abs(t.amount))}</b>
+          <div class="small ${t.left != null && t.left < 0 ? "neg" : "muted"}">${t.left != null ? `budget ${money(t.left)}` : esc(after)}</div></div></div>`;
+    }
+    if (rows.length > 400) h += `<div class="item muted small">Showing the newest 400 – search to narrow it down.</div>`;
+    $("#t-list").innerHTML = h || `<div class="item muted">Nothing found.</div>`;
+    view.querySelectorAll("#t-list .item.tap").forEach((el) => (el.onclick = () => txSheet(d.txs[+el.dataset.i])));
+  };
+  list();
+  $("#t-q").oninput = () => { S.tx.q = $("#t-q").value; clearTimeout(drawActivity.h); drawActivity.h = setTimeout(list, 200); };
+  $("#t-x").onclick = () => { S.tx.q = ""; $("#t-q").value = ""; list(); };
+  $("#t-acc").onchange = () => { S.tx.account = $("#t-acc").value; drawActivity(); };
+  $("#t-days").onchange = () => { S.tx.days = +$("#t-days").value; drawActivity(); };
+}
+
+function txSheet(t) {
+  const into = t.amount < 0;
+  const after = t.after == null ? "–" : t.credit
+    ? (t.after >= 0.005 ? `owes ${cents(t.after)}` : t.after > -0.005 ? "$0.00" : `credit ${cents(-t.after)}`) : cents(t.after);
+  const row = (k, v, cls = "") => `<div class="row" style="padding:5px 0;border-top:1px solid var(--line)"><span class="muted">${k}</span><span class="right ${cls}">${v}</span></div>`;
+  sheet(`<h2>${esc(t.desc)}</h2><p class="muted small" style="margin:2px 0 10px">${esc(t.raw)}</p>
+    ${row("Amount", `<b class="${into ? "pos" : ""}">${into ? "money in +" : ""}${esc(cents(Math.abs(t.amount)))}</b>`)}
+    ${row("Date", esc(wday(t.date)))}${row("Account", esc(t.account))}${row("Bank", esc(t.bank))}
+    ${row("Category", esc(t.category || "–"))}${row("Status", esc(t.thru ? "paid back (not spending)" : t.status))}
+    ${row(t.credit ? "Owed on the card after" : "Balance after", esc(after))}
+    ${t.left != null ? row("Card budget left after", esc(cents(t.left)), t.left < 0 ? "neg" : "") : ""}
+    <div class="btns"><button id="tx-close">Close</button></div>`);
+  $("#tx-close").onclick = closeSheet;
+}
+
 // ------------------------------------------------------------------ Edit
 function drawEdit() {
   const d = S.data.edit || (S.data.edit = call("M.edit_json()"));
@@ -405,12 +493,12 @@ function drawEdit() {
       || `<div class="item muted">No one-time items yet.</div>`;
     h += `</div>`;
   } else if (t === "bills") {
-    h += `<div class="list">` + d.bills.map((x) => `<div class="item tap ${x.include ? "" : "dim"}" data-id="${esc(x.id)}">
+    h += `<button class="add" id="e-add">+ Add a monthly bill</button><div class="list">` + d.bills.map((x) => `<div class="item tap ${x.include ? "" : "dim"}" data-id="${esc(x.id)}">
       <div class="main"><div class="t">${esc(x.concept)}</div>
         <div class="small muted">${x.day ? `day ${esc(x.day)}` : ""}${x.category ? ` · ${esc(x.category)}` : ""}${x.include ? "" : " · off"}</div></div>
       <div class="amt"><b>${cents(x.amount)}</b></div></div>`).join("") + `</div>`;
   } else {
-    h += `<div class="list">` + d.goals.map((x, i) => `<div class="item tap ${x.include ? "" : "dim"}" data-i="${i}">
+    h += `<button class="add" id="e-add">+ Add a spending goal</button><div class="list">` + d.goals.map((x, i) => `<div class="item tap ${x.include ? "" : "dim"}" data-i="${i}">
       <div class="main"><div class="t">${esc(x.category)}</div><div class="small muted">a month${x.include ? "" : " · off"}</div></div>
       <div class="amt"><b>${cents(x.amount)}</b></div></div>`).join("") + `</div>`;
   }
@@ -420,15 +508,11 @@ function drawEdit() {
     $("#e-add").onclick = () => onceSheet(null, d);
     view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => onceSheet(d.once.find((x) => x.id === el.dataset.id), d)));
   } else if (t === "bills") {
-    view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => {
-      const x = d.bills.find((b) => b.id === el.dataset.id);
-      amountSheet(x.concept, x.amount, x.include, (amount, include) => edit({ op: "bill_set", id: x.id, amount, include }));
-    }));
+    $("#e-add").onclick = () => billSheet(null, d);
+    view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => billSheet(d.bills.find((b) => b.id === el.dataset.id), d)));
   } else {
-    view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => {
-      const x = d.goals[+el.dataset.i];
-      amountSheet(`${x.category} (monthly goal)`, x.amount, x.include, (amount, include) => edit({ op: "goal_set", category: x.category, amount, include }));
-    }));
+    $("#e-add").onclick = () => goalSheet(null, d);
+    view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => goalSheet(d.goals[+el.dataset.i], d)));
   }
 }
 
@@ -472,19 +556,88 @@ function onceSheet(x, d) {
   if (!isNew) $("#o-del").onclick = () => { if (confirmTwice($("#o-del"))) edit({ op: "once_delete", id: x.id }); };
 }
 
+function billSheet(x, d) {
+  const isNew = !x;
+  x = x || { concept: "", amount: "", include: true, day: "", category: "", start: "", until: "", paid_with: "p1",
+    card: null, account: null, budget_mode: "extra", essential: null, match_kw: "", match_amount: "", match_days: 5, note: "" };
+  const where = x.card ? `c:${x.card}` : x.account ? `a:${x.account}` : "";
+  const opt = (v, label, sel) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""}>${esc(label)}</option>`;
+  const ess = x.essential === true ? "yes" : x.essential === false ? "no" : "";
+  sheet(`<h2>${isNew ? "New monthly bill" : "Edit bill"}</h2>
+    <label class="f">What</label><input id="b-concept" value="${esc(x.concept)}" placeholder="e.g. Internet">
+    <div class="two">
+      <div><label class="f">Monthly amount</label><input id="b-amt" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(x.amount)}"></div>
+      <div><label class="f">Day of month</label><input id="b-day" type="number" inputmode="numeric" min="1" max="31" value="${esc(x.day ?? "")}" placeholder="1-31"></div>
+    </div>
+    <label class="f">Category</label><input id="b-cat" list="b-cats" value="${esc(x.category)}" placeholder="pick or type">
+    <datalist id="b-cats">${d.categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+    <label class="f">Paid with</label>
+    <select id="b-pw">${d.paid_opts.map(([k, v]) => opt(k, v, x.paid_with)).join("")}</select>
+    <label class="f">Charged to</label>
+    <select id="b-where"><option value="">Main checking (default)</option>
+      <optgroup label="Cards">${d.cards.map((c) => opt("c:" + c.id, c.name, where)).join("")}</optgroup>
+      <optgroup label="Bank accounts">${d.banks.map((c) => opt("a:" + c.id, c.name, where)).join("")}</optgroup></select>
+    <div id="b-modebox"><label class="f">…and the card budget</label>
+      <select id="b-mode">${d.budget_modes.map(([k, v]) => opt(k, v, x.budget_mode)).join("")}</select></div>
+    <div class="two">
+      <div><label class="f">From month</label><input id="b-start" type="month" value="${esc(x.start)}"></div>
+      <div><label class="f">Until month</label><input id="b-until" type="month" value="${esc(x.until)}"></div>
+    </div>
+    <label class="f">Essential?</label>
+    <select id="b-ess">${opt("", "Automatic (card budgets = no, bills = yes)", ess)}${opt("yes", "Yes – must be paid", ess)}${opt("no", "No – could be cut", ess)}</select>
+    <details style="margin-top:12px"><summary class="small muted">Link to the real payments (optional)</summary>
+      <label class="f">Keywords (comma separated, any of them)</label><input id="b-kw" value="${esc(x.match_kw)}" placeholder="verizon wireless">
+      <div class="two">
+        <div><label class="f">…and amount</label><input id="b-ma" value="${esc(x.match_amount)}" placeholder="129±5 · <150"></div>
+        <div><label class="f">…within ± days</label><input id="b-md" type="number" inputmode="numeric" min="0" value="${esc(x.match_days ?? 5)}"></div>
+      </div></details>
+    <label class="f">Note</label><input id="b-note" value="${esc(x.note)}">
+    <div class="toggle"><span>Count it in the plan</span><input type="checkbox" id="b-inc" ${x.include ? "checked" : ""}></div>
+    <div class="btns">${isNew ? "" : '<button class="del" id="b-del">Delete</button>'}<button class="go" id="b-save">Save</button></div>`);
+  const mode = () => $("#b-modebox").classList.toggle("hidden", !$("#b-where").value.startsWith("c:"));
+  $("#b-where").onchange = mode; mode();
+  $("#b-save").onclick = () => {
+    if (!$("#b-concept").value.trim()) return toast("Give it a name.");
+    const amt = parseFloat($("#b-amt").value || "0");
+    if (!(amt > 0)) return toast("Type the monthly amount.");
+    const w = $("#b-where").value, e = $("#b-ess").value;
+    edit({ op: "bill_save", item: { id: x.id || null, concept: $("#b-concept").value.trim(), amount: amt,
+      day: $("#b-day").value, category: $("#b-cat").value.trim(), paid_with: $("#b-pw").value,
+      card: w.startsWith("c:") ? w.slice(2) : null, account: w.startsWith("a:") ? w.slice(2) : null,
+      budget_mode: $("#b-mode").value, start: $("#b-start").value, until: $("#b-until").value,
+      essential: e === "yes" ? true : e === "no" ? false : null, match_kw: $("#b-kw").value,
+      match_amount: $("#b-ma").value, match_days: $("#b-md").value || 5, note: $("#b-note").value,
+      include: $("#b-inc").checked } });
+  };
+  if (!isNew) $("#b-del").onclick = () => { if (confirmTwice($("#b-del"))) edit({ op: "bill_delete", id: x.id }); };
+}
+
+function goalSheet(x, d) {
+  const isNew = !x;
+  x = x || { category: "", amount: "", include: true };
+  const taken = new Set(d.goals.map((g) => g.category));
+  sheet(`<h2>${isNew ? "New spending goal" : esc(x.category)}</h2>
+    <p class="muted small" style="margin:2px 0 0">A monthly limit for a category, across all your cards. It doesn't change the
+      plan; it tracks that category each month.</p>
+    ${isNew ? `<label class="f">Category</label><input id="g-cat" list="g-cats" placeholder="pick or type">
+      <datalist id="g-cats">${d.categories.filter((c) => !taken.has(c)).map((c) => `<option value="${esc(c)}">`).join("")}</datalist>` : ""}
+    <label class="f">Per month</label><input id="g-amt" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(x.amount)}">
+    <div class="toggle"><span>Turned on</span><input type="checkbox" id="g-inc" ${x.include ? "checked" : ""}></div>
+    <div class="btns">${isNew ? "" : '<button class="del" id="g-del">Delete</button>'}<button class="go" id="g-save">Save</button></div>`);
+  $("#g-save").onclick = () => {
+    const amt = parseFloat($("#g-amt").value || "0");
+    const cat = isNew ? $("#g-cat").value.trim() : x.category;
+    if (!cat) return toast("Pick a category.");
+    if (!(amt > 0)) return toast("Type the monthly amount.");
+    edit({ op: "goal_set", category: cat, amount: amt, include: $("#g-inc").checked, new: isNew });
+  };
+  if (!isNew) $("#g-del").onclick = () => { if (confirmTwice($("#g-del"))) edit({ op: "goal_delete", category: x.category }); };
+}
+
 function confirmTwice(btn, text = "Tap again to delete") {
   if (btn.dataset.sure) return true;
   btn.dataset.sure = 1; btn.textContent = text;
   return false;
-}
-
-function amountSheet(title, amount, include, save) {
-  sheet(`<h2>${esc(title)}</h2>
-    <label class="f">Amount</label><input id="a-amt" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(amount)}">
-    <div class="toggle"><span>Count it in the plan</span><input type="checkbox" id="a-inc" ${include ? "checked" : ""}></div>
-    <div class="btns"><button id="a-cancel">Cancel</button><button class="go" id="a-save">Save</button></div>`);
-  $("#a-cancel").onclick = closeSheet;
-  $("#a-save").onclick = () => save(parseFloat($("#a-amt").value || "0"), $("#a-inc").checked);
 }
 
 // ------------------------------------------------------------------ the bottom sheet

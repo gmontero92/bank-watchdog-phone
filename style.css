@@ -135,3 +135,9 @@ input:focus, select:focus { outline: 2px solid #93c5fd; border-color: var(--blue
   max-width: 560px; background: #0f172a; color: #fff; padding: 12px 14px; border-radius: 12px; font-size: 14px;
   box-shadow: 0 6px 20px rgba(0,0,0,.25); }
 .err { background: #fee2e2; color: var(--red); padding: 12px 14px; border-radius: 12px; margin-bottom: 10px; }
+
+/* activity search */
+.search { display: flex; gap: 6px; }
+.search input { flex: 1; }
+.search button { width: 44px; border-radius: 10px; background: var(--bg); }
+#t-list .item .t { max-width: 100%; }
