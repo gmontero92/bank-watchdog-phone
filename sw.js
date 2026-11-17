@@ -1,7 +1,7 @@
 // Makes the app installable and quick to open. It keeps a copy of the page itself and of the Python
 // engine (Pyodide, ~14 MB, downloaded once). It NEVER stores anything from GitHub: your data is fetched
 // fresh every time and only lives in memory while the app is open.
-const SHELL = "bw-shell-v1", ENGINE = "bw-pyodide-314.0.8";
+const SHELL = "bw-shell-v2", ENGINE = "bw-pyodide-314.0.8";
 const FILES = ["./", "index.html", "app.js", "style.css", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
