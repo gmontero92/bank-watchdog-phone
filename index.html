@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1e3a8a">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; connect-src 'self' https://api.github.com https://cdn.jsdelivr.net; img-src 'self' data:; style-src 'self' 'unsafe-inline'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Bank Watchdog</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="top">
+    <div class="brand">
+      <img src="icon-192.png" alt="">
+      <div>
+        <div class="title">Bank Watchdog</div>
+        <div class="sub" id="fresh">&nbsp;</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="btn-reload" class="icon" aria-label="Download the latest data">⟳</button>
+      <button id="btn-sync" class="pill" aria-label="Sync the banks now">Sync</button>
+      <button id="btn-menu" class="icon" aria-label="Menu">⋮</button>
+    </div>
+  </header>
+
+  <main id="view">
+    <div class="splash">
+      <img src="icon-512.png" alt="">
+      <p id="splash-text">Starting…</p>
+    </div>
+  </main>
+
+  <nav id="tabs">
+    <button data-tab="today" class="on"><span>●</span>Today</button>
+    <button data-tab="month"><span>▦</span>Month</button>
+    <button data-tab="plan"><span>☰</span>Plan</button>
+    <button data-tab="edit"><span>✎</span>Edit</button>
+  </nav>
+
+  <div id="veil" class="hidden"></div>
+  <div id="sheet" class="hidden"></div>
+  <div id="toast" class="hidden"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
