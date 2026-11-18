@@ -832,8 +832,12 @@ async function applySchedule() {
       const j = await (await gh(`actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=5`)).json();
       run = (j.workflow_runs || []).find((x) => new Date(x.created_at).getTime() >= since) || run;
     }
-    if (run && run.conclusion === "success") toast("✅ Schedule saved and the timer (cron-job.org) updated.", 6000);
-    else toast("Schedule saved, but the timer (cron-job.org) couldn't be updated: its key isn't in GitHub yet. Add it once in the computer app: Settings → Exact timing → Save to GitHub & test.", 9000);
+    let st = {};
+    try { st = JSON.parse(new TextDecoder().decode(await getRaw("run_log.json", "data", true) || new Uint8Array())).cronjob || {}; } catch { }
+    if (!run || run.status !== "completed") toast("Schedule saved – the timer update is still running; check again in a minute.", 8000);
+    else if (st.ok) toast(`✅ Schedule saved – cron-job.org set (${st.jobs} job(s)).`, 6000);
+    else if (st.off) toast("Schedule saved. No cron-job.org secrets in the repo, so GitHub's own (slower) timer starts the runs.", 9000);
+    else toast(`Schedule saved, but cron-job.org wasn't updated: ${st.msg || "see GitHub → Actions"}.`, 9000);
   } catch (e) {
     toast(`Schedule saved, but starting the update failed: ${e.message}`, 8000);
   }
