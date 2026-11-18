@@ -833,7 +833,7 @@ async function applySchedule() {
       run = (j.workflow_runs || []).find((x) => new Date(x.created_at).getTime() >= since) || run;
     }
     if (run && run.conclusion === "success") toast("✅ Schedule saved and the timer (cron-job.org) updated.", 6000);
-    else toast("Schedule saved. The timer couldn't be updated from the cloud (add the 2 cron-job.org secrets – PHONE_SETUP.md); your computer app updates it the next time it opens.", 9000);
+    else toast("Schedule saved, but the timer (cron-job.org) couldn't be updated: its key isn't in GitHub yet. Add it once in the computer app: Settings → Exact timing → Save to GitHub & test.", 9000);
   } catch (e) {
     toast(`Schedule saved, but starting the update failed: ${e.message}`, 8000);
   }
