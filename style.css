@@ -141,3 +141,12 @@ input:focus, select:focus { outline: 2px solid #93c5fd; border-color: var(--blue
 .search input { flex: 1; }
 .search button { width: 44px; border-radius: 10px; background: var(--bg); }
 #t-list .item .t { max-width: 100%; }
+
+/* chart reading + tappable cards */
+.chartwrap { position: relative; }
+svg.chart { height: auto; touch-action: pan-y; }
+.tip { position: absolute; top: 2px; background: #0f172a; color: #fff; font-size: 12px; padding: 5px 8px; border-radius: 8px;
+  pointer-events: none; white-space: nowrap; }
+.tip .neg { color: #fca5a5; }
+.tapcard { cursor: pointer; } .tapcard:active { background: #f1f5ff; }
+.seg3 button { padding: 8px 4px; font-size: 13.5px; }

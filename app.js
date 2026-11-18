@@ -8,7 +8,7 @@ const DEFAULT_PYODIDE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}
 const API = localStorage.getItem("bw_api") || "https://api.github.com";      // bw_api: only for testing
 const PYODIDE_BASE = localStorage.getItem("bw_pyodide") || DEFAULT_PYODIDE;
 const WORKFLOW = "daily-report.yml";
-const CODE = ["core.py", "budget.py", "dayplan.py", "mobile_api.py"];
+const CODE = ["core.py", "budget.py", "dayplan.py", "cloud.py", "mobile_api.py"];
 
 const $ = (s, el = document) => el.querySelector(s);
 const view = $("#view");
@@ -131,7 +131,7 @@ async function download() {
 import os, sys, importlib
 os.environ["BANKWATCHDOG_DATA"] = "/data"
 if "/app" not in sys.path: sys.path.insert(0, "/app")
-for _m in ("core", "budget", "dayplan", "mobile_api"):
+for _m in ("core", "budget", "dayplan", "cloud", "mobile_api"):
     if _m in sys.modules: importlib.reload(sys.modules[_m])
 import mobile_api as M
 `);
@@ -230,12 +230,15 @@ const LEGEND = `<div class="legend"><span><i style="background:var(--spent)"></i
 function drawToday() {
   const d = S.data.today || (S.data.today = call("M.today_json()"));
   const a = d.all, ic = { alert: "🔴", warn: "🟠", info: "🔵" };
-  let h = `<div class="card hero">
-    <h3>Room left on your cards this cycle</h3>
-    <div class="row"><big class="${a.room < 0 ? "neg" : ""}">${money(a.room)}</big>
-      <span class="muted small right">of ${money(a.capacity)}<br>${money(a.used)} spent${a.pending ? ` · ${money(a.pending)} pending` : ""}</span></div>
-    ${bar(a.used, a.pending, a.capacity, a.pace)}${LEGEND}
-  </div>`;
+  const groups = d.groups && d.groups.length ? d.groups : [{ label: "", ...a, names: [] }];
+  let h = groups.map((g, i) => `<div class="card hero">
+    <h3>${groups.length > 1 ? `Cards ${esc(g.label)} <span class="small">(${esc(g.names.join(", "))})</span>` : "Room left on your cards this cycle"}</h3>
+    <div class="row"><big class="${g.room < 0 ? "neg" : ""}">${g.room < 0 ? `${money(-g.room)} over` : money(g.room)}</big>
+      <span class="muted small right">of ${money(g.capacity)}<br>${money(g.used)} spent${g.pending ? ` · ${money(g.pending)} pending` : ""}</span></div>
+    ${bar(g.used, g.pending, g.capacity, g.pace)}${i === groups.length - 1 ? LEGEND : ""}
+  </div>`).join("");
+  if (groups.length > 1)
+    h += `<p class="muted small" style="padding:0 6px;margin-top:-4px">Split by the paycheck that pays them: room on one doesn't cover the other.</p>`;
   h += `<div class="list">`;
   h += d.heads.length
     ? d.heads.map((x) => `<div class="alert"><span class="ic">${ic[x.level] || "•"}</span><span>${esc(short(x.text))}</span></div>`).join("")
@@ -249,12 +252,12 @@ function drawToday() {
   h += `</div>`;
   for (const c of d.cards) {
     const word = { ok: "on track", slow: "spending fast", full: "budget used up", over: "over budget" }[c.state];
-    h += `<div class="card">
+    h += `<div class="card tapcard" data-id="${esc(c.id)}">
       <div class="row"><span class="dot ${c.state}"></span><b>${esc(c.name)}</b>
         <span class="right ${c.room < 0 ? "neg" : ""}"><b>${money(c.room)}</b> <span class="muted small">left</span></span></div>
       ${bar(c.used, c.pending, c.capacity, c.pace)}
       <div class="row small muted"><span>${money(c.used + c.pending)} of ${money(c.capacity)} · ${word}</span>
-        <span class="right">closes ${md(c.closes)} (${c.days_left} d)</span></div>
+        <span class="right">closes ${md(c.closes)} (${c.days_left} d) ›</span></div>
     </div>`;
   }
   if (d.nobudget.length) h += `<p class="muted small" style="padding:0 6px">No budget set: ${esc(d.nobudget.join(", "))}</p>`;
@@ -266,27 +269,102 @@ function drawToday() {
       <span class="right muted">${b.bank_updated ? `bank data ${esc(md(b.bank_updated))}` : `synced ${esc(ago(b.last_sync))}`}</span></div>
       ${b.error ? `<div class="small neg">${esc(b.error)}</div>` : ""}`).join("") + `</div>`;
   view.innerHTML = h;
+  view.querySelectorAll(".tapcard").forEach((el) => (el.onclick = () => cardSheet(d.cards.find((c) => c.id === el.dataset.id))));
+}
+
+function cardSheet(c) {
+  const x = c.detail || {}, used = c.used + c.pending;
+  const len = x.length || 30, el = x.elapsed || 1, left = Math.max(1, c.days_left);
+  const plan = c.capacity / len, rate = (x.spent || 0) / el;
+  const diff = (c.pace || 0) - used;                         // + = under where you should be
+  const atRate = used + rate * c.days_left;
+  const row = (k, v, cls = "") => `<div class="row" style="padding:6px 0;border-top:1px solid var(--line)"><span class="muted">${k}</span><span class="right ${cls}">${v}</span></div>`;
+  let h = `<h2>${esc(c.name)}</h2>
+    <p class="muted small" style="margin:2px 0 8px">Cycle ${x.start ? esc(md(x.start)) : "?"} – ${esc(md(c.closes))} · day ${el} of ${len} · ${c.days_left} day(s) left</p>
+    ${bar(c.used, c.pending, c.capacity, c.pace)}
+    <div class="stats" style="margin:10px 0 4px">
+      <div><small>Budget</small><b>${money(c.capacity)}</b></div>
+      <div><small>Spent${c.pending ? " + coming" : ""}</small><b>${money(used)}</b></div>
+      <div><small>Left</small><b class="${c.room < 0 ? "neg" : "pos"}">${money(c.room)}</b></div>
+    </div>
+    ${row("Where you should be today 📍", money(c.pace || 0))}
+    ${row(diff >= 0 ? "You're under that by" : "You're ahead of it by", money(Math.abs(diff)), diff >= 0 ? "pos" : "neg")}
+    ${row("Planned rate", `${money(plan)}/day`)}
+    ${row("Your rate so far", `${money(rate)}/day`, rate > plan * 1.15 ? "neg" : "")}
+    ${row("To stay on budget", c.room > 0 ? `${money(c.room / left)}/day for ${c.days_left} day(s)` : "stop – it's full", c.room > 0 ? "" : "neg")}
+    ${row("At your rate it closes at", `${money(atRate)} (${atRate > c.capacity ? `${money(atRate - c.capacity)} over` : `${money(c.capacity - atRate)} under`})`, atRate > c.capacity ? "neg" : "pos")}`;
+  if (x.items && x.items.length)
+    h += row("Still coming before it closes", x.items.map((i) => `${esc(i.name)} ${money(i.amount)} (${esc(md(i.date))})`).join("<br>"));
+  h += `<h3 style="margin:14px 0 2px;font-size:14px;color:var(--muted)">Paying it</h3>`;
+  if (x.owed != null) h += row("Owed on the card now", cents(x.owed));
+  if (x.due_date && x.due_now > 0.005) h += row(`${x.due_is_min ? "Minimum due" : "Statement due"} ${esc(md(x.due_date))}`, cents(x.due_now), "b");
+  else if (x.due_date) h += row(`Statement due ${esc(md(x.due_date))}`, "paid ✔", "pos");
+  if (x.next_pay) h += row(`Plan pays ${esc(md(x.next_pay.date))}`, `${cents(x.next_pay.amount)}<div class="small muted">${esc(x.next_pay.why)}</div>`);
+  if (x.plan) h += row("Payoff plan", esc(x.plan));
+  sheet(h + `<div class="btns"><button id="cd-close">Close</button></div>`);
+  $("#cd-close").onclick = closeSheet;
 }
 
 // ------------------------------------------------------------------ Month
+function ticks(lo, hi) {                                  // 3-5 round numbers between lo and hi
+  const span = hi - lo || 1, raw = span / 4, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((k) => k >= raw);
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-6; v += step) out.push(v);
+  return out;
+}
+const kfmt = (v) => (Math.abs(v) >= 1000 ? `${v < 0 ? "−" : ""}$${(Math.abs(v) / 1000).toFixed(Math.abs(v) % 1000 ? 1 : 0)}k` : money(v));
+
 function chart(series, today) {
   if (!series.length) return "";
-  const W = 340, H = 150, P = 6, vals = series.map((s) => s.balance);
-  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = hi - lo || 1;
-  const x = (i) => P + (i * (W - 2 * P)) / Math.max(1, series.length - 1);
+  const W = 340, H = 170, P = 8, LX = 42, vals = series.map((s) => s.balance);
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  const tk = ticks(lo, hi);
+  lo = Math.min(lo, tk[0]); hi = Math.max(hi, tk[tk.length - 1]);
+  const span = hi - lo || 1;
+  const x = (i) => LX + (i * (W - LX - P)) / Math.max(1, series.length - 1);
   const y = (v) => P + ((hi - v) / span) * (H - 2 * P);
   const pts = series.map((s, i) => `${x(i).toFixed(1)},${y(s.balance).toFixed(1)}`);
   const lastReal = series.reduce((k, s, i) => (s.actual ? i : k), -1);
   const real = pts.slice(0, lastReal + 1).join(" "), plan = pts.slice(Math.max(0, lastReal)).join(" ");
   const ti = series.findIndex((s) => s.date === today);
   const low = vals.indexOf(Math.min(...vals));
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/>
+  chart.geo = { x, y, n: series.length, LX, W, P, H };
+  return `<div class="chartwrap"><svg class="chart" id="m-chart" viewBox="0 0 ${W} ${H}">
+    ${tk.map((v) => `<line x1="${LX}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="${v === 0 ? "#94a3b8" : "#e2e8f0"}" stroke-width="1" ${v === 0 ? 'stroke-dasharray="3 3"' : ""}/>
+      <text x="${LX - 4}" y="${y(v) + 3.5}" text-anchor="end" font-size="10" fill="#64748b">${kfmt(v)}</text>`).join("")}
+    <text x="${LX}" y="${H - 1}" font-size="9" fill="#94a3b8">1</text>
+    <text x="${W - P}" y="${H - 1}" font-size="9" fill="#94a3b8" text-anchor="end">${series.length}</text>
     ${ti >= 0 ? `<line x1="${x(ti)}" x2="${x(ti)}" y1="0" y2="${H}" stroke="#1d4ed8" stroke-width="1" opacity=".35"/>` : ""}
     ${real ? `<polyline points="${real}" fill="none" stroke="#1d4ed8" stroke-width="2.5" vector-effect="non-scaling-stroke"/>` : ""}
     ${lastReal < series.length - 1 ? `<polyline points="${plan}" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>` : ""}
     <circle cx="${x(low)}" cy="${y(vals[low])}" r="4" fill="${vals[low] < 0 ? "#b91c1c" : "#15803d"}"/>
-  </svg>`;
+    <g id="m-cur" style="display:none"><line id="m-cur-l" y1="${P}" y2="${H - P}" stroke="#0f172a" stroke-width="1"/>
+      <circle id="m-cur-c" r="4.5" fill="#fff" stroke="#0f172a" stroke-width="2"/></g>
+  </svg><div id="m-tip" class="tip hidden"></div></div>`;
+}
+
+// touch (or drag) the chart: the day and its balance at the end of the day
+function chartTouch(series) {
+  const svg = $("#m-chart"), tip = $("#m-tip"), g = chart.geo;
+  if (!svg) return;
+  const at = (clientX) => {
+    const r = svg.getBoundingClientRect(), vx = ((clientX - r.left) / r.width) * g.W;
+    const i = Math.max(0, Math.min(g.n - 1, Math.round(((vx - g.LX) / (g.W - g.LX - g.P)) * (g.n - 1))));
+    const s = series[i], cx = g.x(i), cy = g.y(s.balance);
+    $("#m-cur").style.display = "";
+    $("#m-cur-l").setAttribute("x1", cx); $("#m-cur-l").setAttribute("x2", cx);
+    $("#m-cur-c").setAttribute("cx", cx); $("#m-cur-c").setAttribute("cy", cy);
+    tip.innerHTML = `<b>${esc(wday(s.date))}</b> · ${s.actual ? "real" : "plan"}<br><span class="${s.balance < 0 ? "neg" : ""}">${money(s.balance)}</span> end of day`;
+    tip.classList.remove("hidden");
+    const left = (cx / g.W) * r.width;
+    tip.style.left = `${Math.max(4, Math.min(r.width - tip.offsetWidth - 4, left - tip.offsetWidth / 2))}px`;
+  };
+  const move = (e) => { const t = e.touches ? e.touches[0] : e; at(t.clientX); if (e.cancelable && e.touches) e.preventDefault(); };
+  svg.addEventListener("touchstart", move, { passive: false });
+  svg.addEventListener("touchmove", move, { passive: false });
+  svg.addEventListener("mousemove", move);
+  svg.addEventListener("click", move);
 }
 
 function drawMonth() {
@@ -305,7 +383,7 @@ function drawMonth() {
         <div><small>Lowest (${esc(md(d.low_date))})</small><b class="${d.low < 0 ? "neg" : ""}">${money(d.low)}</b></div>
       </div>
       ${chart(d.series, d.today)}
-      <div class="legend"><span>━ real</span><span>┅ plan</span><span>● lowest day</span></div>
+      <div class="legend"><span>━ real</span><span>┅ plan</span><span>● lowest day</span><span>· touch the line to read a day</span></div>
     </div>
     <div class="chips">
       <button class="chip ${S.filter === "all" ? "on" : ""}" data-f="all">Everything</button>
@@ -337,6 +415,7 @@ function drawMonth() {
     Card purchases don't change your cash until you pay the card.</p>`;
   view.innerHTML = h;
   if ($("#m-today")) $("#m-today").onclick = () => [...document.querySelectorAll(".dayhead[data-date]")].find((x) => x.dataset.date <= d.today)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  chartTouch(d.series);
   $("#m-prev").onclick = () => { S.month = m === 1 ? [y - 1, 12] : [y, m - 1]; drawMonth(); };
   $("#m-next").onclick = () => { S.month = m === 12 ? [y + 1, 1] : [y, m + 1]; drawMonth(); };
   view.querySelectorAll(".chip").forEach((c) => (c.onclick = () => { S.filter = c.dataset.f; drawMonth(); }));
@@ -387,7 +466,8 @@ function drawPlan() {
         ${c.late.length ? `<div class="small neg">still to pay: ${esc(c.late.join(", "))}</div>` : ""}</div>
       </details></div>`;
   });
-  h += `<p class="muted small" style="padding:0 6px">"Your own money" = the balance minus what you still owe on loans.</p>`;
+  h += `<p class="muted small" style="padding:0 6px">"Your own money" = the balance minus what you still owe on loans
+    and what you carry on cards with a payoff plan.</p>`;
   view.innerHTML = h;
 }
 
@@ -482,7 +562,8 @@ function drawEdit() {
   let h = `<div class="seg3">
     <button data-t="once" class="${t === "once" ? "on" : ""}">One-time</button>
     <button data-t="bills" class="${t === "bills" ? "on" : ""}">Bills</button>
-    <button data-t="goals" class="${t === "goals" ? "on" : ""}">Goals</button></div>`;
+    <button data-t="goals" class="${t === "goals" ? "on" : ""}">Goals</button>
+    <button data-t="cards" class="${t === "cards" ? "on" : ""}">Cards</button></div>`;
   if (t === "once") {
     h += `<button class="add" id="e-add">+ Add an expense or income</button><div class="list">`;
     const items = [...d.once].sort((a, b) => String(b.date || "9999").localeCompare(String(a.date || "9999")));
@@ -497,6 +578,14 @@ function drawEdit() {
       <div class="main"><div class="t">${esc(x.concept)}</div>
         <div class="small muted">${x.day ? `day ${esc(x.day)}` : ""}${x.category ? ` · ${esc(x.category)}` : ""}${x.include ? "" : " · off"}</div></div>
       <div class="amt"><b>${cents(x.amount)}</b></div></div>`).join("") + `</div>`;
+  } else if (t === "cards") {
+    const plans = Object.fromEntries(d.plans.map((p) => [p.id, p]));
+    h += `<p class="muted small" style="padding:0 6px;margin-top:0">A payoff plan: pay only the minimum (or a fixed amount) on a
+      card for a while – e.g. a 0% intro APR – and pay it all in one month. The plan and the cash flow use the minimum;
+      the carried balance counts as owed.</p><div class="list">` + d.cards.map((c) => `<div class="item tap" data-id="${esc(c.id)}">
+      <div class="main"><div class="t">${esc(c.name)}</div>
+        <div class="small ${plans[c.id] ? "" : "muted"}">${plans[c.id] ? esc(plans[c.id].text) : "paid in full every month"}</div></div>
+      <div class="amt muted">›</div></div>`).join("") + `</div>`;
   } else {
     h += `<button class="add" id="e-add">+ Add a spending goal</button><div class="list">` + d.goals.map((x, i) => `<div class="item tap ${x.include ? "" : "dim"}" data-i="${i}">
       <div class="main"><div class="t">${esc(x.category)}</div><div class="small muted">a month${x.include ? "" : " · off"}</div></div>
@@ -510,6 +599,8 @@ function drawEdit() {
   } else if (t === "bills") {
     $("#e-add").onclick = () => billSheet(null, d);
     view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => billSheet(d.bills.find((b) => b.id === el.dataset.id), d)));
+  } else if (t === "cards") {
+    view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => planSheet(el.dataset.id, d)));
   } else {
     $("#e-add").onclick = () => goalSheet(null, d);
     view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => goalSheet(d.goals[+el.dataset.i], d)));
@@ -634,6 +725,120 @@ function goalSheet(x, d) {
   if (!isNew) $("#g-del").onclick = () => { if (confirmTwice($("#g-del"))) edit({ op: "goal_delete", category: x.category }); };
 }
 
+function planSheet(cid, d) {
+  const card = d.cards.find((c) => c.id === cid), cur = d.plans.find((p) => p.id === cid);
+  const now = new Date(), ym = (k) => { const t = new Date(now.getFullYear(), now.getMonth() + k, 1); return iso(t).slice(0, 7); };
+  const p = cur || { id: cid, start: ym(1), payoff: ym(12), apr: 0, promo_end: "", apr_after: 0, mode: "min", pct: 1, floor: 40, fixed: 0, note: "" };
+  sheet(`<h2>${esc(card.name)}</h2>
+    <p class="muted small" style="margin:2px 0 0">Statements due from the first month get only the minimum; the one due in the
+      payoff month gets everything carried. Check your card's terms for the minimum (Chase: 1% + interest, at least $40).</p>
+    <div class="two">
+      <div><label class="f">Minimum only from</label><input id="pl-start" type="month" value="${esc(p.start)}"></div>
+      <div><label class="f">Pay it all in</label><input id="pl-payoff" type="month" value="${esc(p.payoff)}"></div>
+    </div>
+    <div class="two">
+      <div><label class="f">APR while carried (%)</label><input id="pl-apr" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(p.apr)}"></div>
+      <div><label class="f">Intro APR ends</label><input id="pl-pe" type="month" value="${esc(p.promo_end)}"></div>
+    </div>
+    <label class="f">APR after the intro ends (%)</label><input id="pl-apr2" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(p.apr_after)}">
+    <label class="f">Each month pay</label>
+    <div class="radio"><button data-m="min" class="${p.mode === "fixed" ? "" : "on"}">The minimum</button>
+      <button data-m="fixed" class="${p.mode === "fixed" ? "on" : ""}">A fixed amount</button></div>
+    <div class="two">
+      <div><label class="f">Minimum: % of statement</label><input id="pl-pct" type="number" inputmode="decimal" step="0.1" min="0" value="${esc(p.pct)}"></div>
+      <div><label class="f">…at least ($)</label><input id="pl-floor" type="number" inputmode="decimal" step="1" min="0" value="${esc(p.floor)}"></div>
+    </div>
+    <div id="pl-fixbox"><label class="f">Fixed amount a month ($)</label><input id="pl-fixed" type="number" inputmode="decimal" step="1" min="0" value="${esc(p.fixed)}"></div>
+    <div class="btns">${cur ? '<button class="del" id="pl-del">Remove plan</button>' : ""}<button class="go" id="pl-save">Save</button></div>`);
+  let mode = p.mode === "fixed" ? "fixed" : "min";
+  const fix = () => $("#pl-fixbox").classList.toggle("hidden", mode !== "fixed");
+  document.querySelectorAll("#sheet .radio button").forEach((b) => (b.onclick = () => {
+    mode = b.dataset.m; document.querySelectorAll("#sheet .radio button").forEach((o) => o.classList.toggle("on", o === b)); fix();
+  }));
+  fix();
+  $("#pl-save").onclick = () => edit({ op: "plan_save", old: cid, item: { id: cid, start: $("#pl-start").value, payoff: $("#pl-payoff").value,
+    apr: $("#pl-apr").value || 0, promo_end: $("#pl-pe").value, apr_after: $("#pl-apr2").value || 0, mode,
+    pct: $("#pl-pct").value || 0, floor: $("#pl-floor").value || 0, fixed: $("#pl-fixed").value || 0, note: p.note || "" } });
+  if (cur) $("#pl-del").onclick = () => { if (confirmTwice($("#pl-del"), "Tap again to remove")) edit({ op: "plan_delete", id: cid }); };
+}
+
+// ------------------------------------------------------------------ Settings (only the WhatsApp report)
+function settingsSheet() {
+  const d = call("M.settings_json()"), sc = d.schedule;
+  const nice = (t) => { const [h, m] = t.split(":").map(Number); return `${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
+  sheet(`<h2>WhatsApp report</h2>
+    <p class="muted small" style="margin:2px 0 0">Now: ${esc(d.text)}</p>
+    <label class="f">Send it</label>
+    <div class="radio"><button data-m="time" class="${sc.mode === "covered" ? "" : "on"}">At set times</button>
+      <button data-m="covered" class="${sc.mode === "covered" ? "on" : ""}">When the banks caught up</button></div>
+    <p class="small muted" id="st-help" style="margin:6px 0 0"></p>
+    <label class="f" id="st-tl">At (several: separate with commas)</label>
+    <input id="st-times" value="${esc(sc.times.map(nice).join(", "))}" placeholder="6:17 am">
+    <div id="st-cov" class="two">
+      <div><label class="f">At the latest at</label><input id="st-dl" type="time" value="${esc(sc.deadline)}"></div>
+      <div><label class="f">Check every</label><select id="st-every"><option value="60" ${sc.every > 30 ? "selected" : ""}>1 hour</option>
+        <option value="30" ${sc.every <= 30 ? "selected" : ""}>30 min</option></select></div>
+    </div>
+    <label class="f">On</label>
+    <div class="chips" id="st-days">${d.days.map((n, i) => `<button class="chip ${sc.days.includes(i) ? "on" : ""}" data-d="${i}">${n}</button>`).join("")}</div>
+    <label class="f">Time zone</label>
+    <select id="st-tz">${d.timezones.map((z) => `<option ${z === sc.tz ? "selected" : ""}>${esc(z)}</option>`).join("")}</select>
+    <div class="toggle"><span>Send the report (off = only sync the banks)</span><input type="checkbox" id="st-send" ${sc.send ? "checked" : ""}></div>
+    <div class="toggle"><span>Other days: heads-up only if something can't wait</span><input type="checkbox" id="st-check" ${sc.offday_check ? "checked" : ""}></div>
+    <label class="f">Bars in the message</label>
+    <div class="radio" id="st-bars"><button data-b="emoji" class="${d.bars === "text" ? "" : "on"}">🟦🟦📍⬜ squares</button>
+      <button data-b="text" class="${d.bars === "text" ? "on" : ""}">██│▋░ thin text</button></div>
+    <div class="btns"><button id="st-cancel">Cancel</button><button class="go" id="st-save">Save</button></div>`);
+  let mode = sc.mode === "covered" ? "covered" : "time", bars = d.bars === "text" ? "text" : "emoji";
+  const upd = () => {
+    $("#st-cov").classList.toggle("hidden", mode !== "covered");
+    $("#st-tl").textContent = mode === "covered" ? "Start checking at" : "At (several: separate with commas)";
+    $("#st-help").textContent = mode === "covered"
+      ? "From that time the cloud syncs and checks; as soon as every bank has updated today, the report goes out – so it covers everything through yesterday. At the time limit it's sent anyway and says which bank is behind."
+      : "";
+  };
+  document.querySelectorAll("#sheet .radio:not(#st-bars) button").forEach((b) => (b.onclick = () => {
+    mode = b.dataset.m; b.parentNode.querySelectorAll("button").forEach((o) => o.classList.toggle("on", o === b)); upd();
+  }));
+  document.querySelectorAll("#st-bars button").forEach((b) => (b.onclick = () => {
+    bars = b.dataset.b; b.parentNode.querySelectorAll("button").forEach((o) => o.classList.toggle("on", o === b));
+  }));
+  document.querySelectorAll("#st-days .chip").forEach((b) => (b.onclick = () => b.classList.toggle("on")));
+  upd();
+  $("#st-cancel").onclick = closeSheet;
+  $("#st-save").onclick = async () => {
+    const days = [...document.querySelectorAll("#st-days .chip.on")].map((b) => +b.dataset.d);
+    const times = $("#st-times").value.split(",").map((t) => t.trim()).filter(Boolean);
+    const newSc = { ...sc, times, days, tz: $("#st-tz").value, send: $("#st-send").checked, offday_check: $("#st-check").checked,
+      mode, deadline: $("#st-dl").value || sc.deadline, every: +$("#st-every").value };
+    if (bars !== d.bars) await edit({ op: "bars_set", bars }, { quiet: true });
+    const same = JSON.stringify(newSc) === JSON.stringify(sc);
+    if (same) { closeSheet(); return toast("Saved."); }
+    const ok = await edit({ op: "schedule_set", schedule: newSc });
+    if (ok) applySchedule();
+  };
+}
+
+// The new times must reach cron-job.org (it starts the cloud runs): the cloud does it with two secrets.
+async function applySchedule() {
+  const since = Date.now() - 60_000;
+  try {
+    await gh(`actions/workflows/${WORKFLOW}/dispatches`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref: "main", inputs: { send: "no", kind: "schedule" } }) });
+    toast("Schedule saved – updating the timer (about a minute)…", 6000);
+    let run = null;
+    for (let i = 0; i < 30 && !(run && run.status === "completed"); i++) {
+      await sleep(6000);
+      const j = await (await gh(`actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=5`)).json();
+      run = (j.workflow_runs || []).find((x) => new Date(x.created_at).getTime() >= since) || run;
+    }
+    if (run && run.conclusion === "success") toast("✅ Schedule saved and the timer (cron-job.org) updated.", 6000);
+    else toast("Schedule saved. The timer couldn't be updated from the cloud (add the 2 cron-job.org secrets – PHONE_SETUP.md); your computer app updates it the next time it opens.", 9000);
+  } catch (e) {
+    toast(`Schedule saved, but starting the update failed: ${e.message}`, 8000);
+  }
+}
+
 function confirmTwice(btn, text = "Tap again to delete") {
   if (btn.dataset.sure) return true;
   btn.dataset.sure = 1; btn.textContent = text;
@@ -651,8 +856,8 @@ $("#veil").onclick = closeSheet;
 // ------------------------------------------------------------------ saving a change
 // Always: download the newest budget.json, apply the change to it, upload it. If GitHub says someone
 // else (the computer) saved in between, start over with the newer copy - nothing is overwritten.
-async function edit(op) {
-  if (S.busy) return toast("One moment – still working.");
+async function edit(op, opts = {}) {
+  if (S.busy) { toast("One moment – still working."); return false; }
   S.busy = true;
   const btn = document.querySelector("#sheet .go"); if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
   try {
@@ -671,13 +876,17 @@ async function edit(op) {
         throw e;
       }
     }
-    if (!res.ok) { toast(res.msg); return; }
-    closeSheet();
+    if (!res.ok) { toast(res.msg); return false; }
     S.data = {};
-    toast(`${res.msg} Saved to GitHub.`);
-    show(S.tab);
+    if (!opts.quiet) {
+      closeSheet();
+      toast(`${res.msg} Saved to GitHub.`);
+      show(S.tab);
+    }
+    return true;
   } catch (e) {
     toast(`Not saved: ${e.message}`, 6000);
+    return false;
   } finally {
     S.busy = false;
     if (btn) { btn.disabled = false; btn.textContent = "Save"; }
@@ -733,6 +942,8 @@ $("#btn-menu").onclick = () => {
       <div class="item tap" id="mn-sync"><div class="main"><div class="t">🔄 Sync the banks now</div></div></div>
       <div class="item tap" id="mn-reload"><div class="main"><div class="t">⟳ Download the latest data</div>
         <div class="small muted">${S.loadedAt ? `last downloaded ${esc(ago(S.loadedAt))}` : ""}</div></div></div>
+      <div class="item tap" id="mn-settings"><div class="main"><div class="t">⚙ Settings – WhatsApp report</div>
+        <div class="small muted">When it's sent, bars style</div></div></div>
       <div class="item tap" id="mn-setup"><div class="main"><div class="t">🔑 Repo and token</div>
         <div class="small muted">${esc(cfg.repo || "not set")}</div></div></div>
       <div class="item tap" id="mn-forget"><div class="main"><div class="t neg">Forget this phone</div>
@@ -744,6 +955,7 @@ $("#btn-menu").onclick = () => {
   $("#mn-sync").onclick = () => { closeSheet(); runCloud(false); };
   $("#mn-reload").onclick = () => { closeSheet(); $("#btn-reload").onclick(); };
   $("#mn-setup").onclick = () => { closeSheet(); setupScreen(); };
+  $("#mn-settings").onclick = () => { try { settingsSheet(); } catch (e) { toast(e.message); } };
   $("#mn-forget").onclick = (ev) => {
     if (!confirmTwice(ev.currentTarget.querySelector(".t"), "Tap again to forget this phone")) return;
     cfg.forget(); closeSheet(); S.info = null; setupScreen();
