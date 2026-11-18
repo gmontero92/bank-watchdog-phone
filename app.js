@@ -235,7 +235,10 @@ function drawToday() {
     <h3>${groups.length > 1 ? `Cards ${esc(g.label)} <span class="small">(${esc(g.names.join(", "))})</span>` : "Room left on your cards this cycle"}</h3>
     <div class="row"><big class="${g.room < 0 ? "neg" : ""}">${g.room < 0 ? `${money(-g.room)} over` : money(g.room)}</big>
       <span class="muted small right">of ${money(g.capacity)}<br>${money(g.used)} spent${g.pending ? ` · ${money(g.pending)} pending` : ""}</span></div>
-    ${bar(g.used, g.pending, g.capacity, g.pace)}${i === groups.length - 1 ? LEGEND : ""}
+    ${bar(g.used, g.pending, g.capacity, g.pace)}
+    ${(g.closed || []).length ? `<div class="small muted" style="margin-bottom:4px">Includes closed statements this paycheck pays:
+      ${g.closed.map((c) => `${esc(c.name)} <span class="${c.room < 0 ? "neg" : "pos"}">${c.room < 0 ? `${money(-c.room)} over` : `${money(c.room)} under`}</span>`).join(" · ")}</div>` : ""}
+    ${i === groups.length - 1 ? LEGEND : ""}
   </div>`).join("");
   if (groups.length > 1)
     h += `<p class="muted small" style="padding:0 6px;margin-top:-4px">Split by the paycheck that pays them: room on one doesn't cover the other.</p>`;
