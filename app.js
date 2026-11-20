@@ -563,11 +563,22 @@ function drawEdit() {
   const d = S.data.edit || (S.data.edit = call("M.edit_json()"));
   const t = S.editTab;
   let h = `<div class="seg3">
+    <button data-t="pay" class="${t === "pay" ? "on" : ""}">Pay</button>
     <button data-t="once" class="${t === "once" ? "on" : ""}">One-time</button>
     <button data-t="bills" class="${t === "bills" ? "on" : ""}">Bills</button>
     <button data-t="goals" class="${t === "goals" ? "on" : ""}">Goals</button>
     <button data-t="cards" class="${t === "cards" ? "on" : ""}">Cards</button></div>`;
-  if (t === "once") {
+  const rep = Object.fromEntries(d.repeats);
+  if (t === "pay") {
+    h += `<button class="add" id="e-add">+ Add a paycheck or income</button><div class="list">`;
+    const inc = [...d.incomes].sort((a, b) => (b.main - a.main) || (a.past - b.past) || String(a.next || "9").localeCompare(String(b.next || "9")));
+    h += inc.map((x) => `<div class="item tap ${x.past ? "dim" : ""}" data-i="${x.i}">
+      <div class="main"><div class="t">${esc(x.name)}${x.main ? "" : ' <span class="badge">other income</span>'}</div>
+        <div class="small muted">${esc(rep[x.repeat] || x.repeat)} · ${x.next ? `next ${esc(md(x.next))}` : "no more payments"}</div></div>
+      <div class="amt"><b class="pos">${cents(x.amount)}</b></div></div>`).join("") || `<div class="item muted">No income yet.</div>`;
+    h += `</div><p class="muted small" style="padding:0 6px">Paychecks pay the bills (1st of the month = cards, last = rent,
+      a 3rd in a month = EXTRA). "Other income" only adds to the cash. Different amounts on specific dates are set on the computer.</p>`;
+  } else if (t === "once") {
     h += `<button class="add" id="e-add">+ Add an expense or income</button><div class="list">`;
     const items = [...d.once].sort((a, b) => String(b.date || "9999").localeCompare(String(a.date || "9999")));
     h += items.map((x) => `<div class="item tap ${x.include ? "" : "dim"}" data-id="${esc(x.id)}">
@@ -596,7 +607,10 @@ function drawEdit() {
   }
   view.innerHTML = h;
   view.querySelectorAll(".seg3 button").forEach((b) => (b.onclick = () => { S.editTab = b.dataset.t; drawEdit(); }));
-  if (t === "once") {
+  if (t === "pay") {
+    $("#e-add").onclick = () => incomeSheet(null, d);
+    view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => incomeSheet(d.incomes.find((x) => x.i === +el.dataset.i), d)));
+  } else if (t === "once") {
     $("#e-add").onclick = () => onceSheet(null, d);
     view.querySelectorAll(".item.tap").forEach((el) => (el.onclick = () => onceSheet(d.once.find((x) => x.id === el.dataset.id), d)));
   } else if (t === "bills") {
@@ -726,6 +740,41 @@ function goalSheet(x, d) {
     edit({ op: "goal_set", category: cat, amount: amt, include: $("#g-inc").checked, new: isNew });
   };
   if (!isNew) $("#g-del").onclick = () => { if (confirmTwice($("#g-del"))) edit({ op: "goal_delete", category: x.category }); };
+}
+
+function incomeSheet(x, d) {
+  const isNew = !x;
+  x = x || { name: "", amount: "", main: true, start: iso(new Date()), repeat: "biweekly", end: "never", end_date: "", count: "", first_amount: "", note: "" };
+  const opt = (list, sel) => list.map(([k, v]) => `<option value="${esc(k)}" ${k === sel ? "selected" : ""}>${esc(v)}</option>`).join("");
+  sheet(`<h2>${isNew ? "New paycheck / income" : esc(x.name)}</h2>
+    <div class="radio" style="margin-top:10px"><button data-m="1" class="${x.main ? "on" : ""}">Paycheck</button>
+      <button data-m="0" class="${x.main ? "" : "on"}">Other income</button></div>
+    <label class="f">Name</label><input id="i-name" value="${esc(x.name)}" placeholder="e.g. SpaceX paycheck">
+    <div class="two">
+      <div><label class="f">Amount (net)</label><input id="i-amt" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(x.amount)}"></div>
+      <div><label class="f">First payment</label><input id="i-start" type="date" value="${esc(x.start)}"></div>
+    </div>
+    <label class="f">Repeats</label><select id="i-rep">${opt(d.repeats, x.repeat)}</select>
+    <label class="f">Ends</label><select id="i-end">${opt(d.ends, x.end)}</select>
+    <div id="i-endd"><label class="f">Last payment on</label><input id="i-enddate" type="date" value="${esc(x.end_date)}"></div>
+    <div id="i-endc"><label class="f">Number of payments</label><input id="i-count" type="number" inputmode="numeric" min="1" value="${esc(x.count)}"></div>
+    <label class="f">First payment amount (blank = same)</label><input id="i-first" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(x.first_amount)}">
+    <label class="f">Note</label><input id="i-note" value="${esc(x.note)}">
+    <div class="btns">${isNew ? "" : '<button class="del" id="i-del">Delete</button>'}<button class="go" id="i-save">Save</button></div>`);
+  let main = !!x.main;
+  document.querySelectorAll("#sheet .radio button").forEach((b) => (b.onclick = () => {
+    main = b.dataset.m === "1"; b.parentNode.querySelectorAll("button").forEach((o) => o.classList.toggle("on", o === b));
+  }));
+  const ends = () => {
+    $("#i-endd").classList.toggle("hidden", $("#i-end").value !== "date");
+    $("#i-endc").classList.toggle("hidden", $("#i-end").value !== "count");
+  };
+  $("#i-end").onchange = ends; ends();
+  $("#i-save").onclick = () => edit({ op: "income_save", i: isNew ? null : x.i, was: isNew ? "" : x.name, item: {
+    name: $("#i-name").value.trim(), amount: $("#i-amt").value, main, start: $("#i-start").value, repeat: $("#i-rep").value,
+    end: $("#i-end").value, end_date: $("#i-enddate").value, count: $("#i-count").value, first_amount: $("#i-first").value,
+    note: $("#i-note").value } });
+  if (!isNew) $("#i-del").onclick = () => { if (confirmTwice($("#i-del"))) edit({ op: "income_delete", i: x.i, was: x.name }); };
 }
 
 function planSheet(cid, d) {
