@@ -149,4 +149,4 @@ svg.chart { height: auto; touch-action: pan-y; }
   pointer-events: none; white-space: nowrap; }
 .tip .neg { color: #fca5a5; }
 .tapcard { cursor: pointer; } .tapcard:active { background: #f1f5ff; }
-.seg3 button { padding: 8px 4px; font-size: 13.5px; }
+.seg3 button { padding: 8px 2px; font-size: 13px; }
