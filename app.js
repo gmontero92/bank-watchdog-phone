@@ -3,7 +3,7 @@
 // from YOUR private repo (with the token saved on this phone only) and runs the desktop's own
 // calculations inside the browser (Pyodide = Python for the web).
 
-const APP_VERSION = "2026-11-20b";               // shown in ⋮ – tells you which page the phone is running
+const APP_VERSION = "2026-11-20c";               // shown in ⋮ – tells you which page the phone is running
 const PYODIDE_VERSION = "314.0.8";
 const DEFAULT_PYODIDE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`;
 const API = localStorage.getItem("bw_api") || "https://api.github.com";      // bw_api: only for testing
@@ -302,7 +302,8 @@ function cardSheet(c) {
   h += `<h3 style="margin:14px 0 2px;font-size:14px;color:var(--muted)">Paying it</h3>`;
   if (x.owed != null) h += row("Owed on the card now", cents(x.owed));
   if (x.due_date && x.due_now > 0.005) h += row(`${x.due_is_min ? "Minimum due" : "Statement due"} ${esc(md(x.due_date))}`, cents(x.due_now), "b");
-  else if (x.due_date) h += row(`Statement due ${esc(md(x.due_date))}`, "paid ✔", "pos");
+  else if (x.due_date) h += row(`Statement due ${esc(md(x.due_date))}`,
+    x.stmt_tol ? `paid ✔ <span class="small muted">(${cents(x.stmt_tol)} off the estimate, ignored)</span>` : "paid ✔", "pos");
   if (x.next_pay) h += row(`Plan pays ${esc(md(x.next_pay.date))}`, `${cents(x.next_pay.amount)}<div class="small muted">${esc(x.next_pay.why)}</div>`);
   if (x.plan) h += row("Payoff plan", esc(x.plan));
   sheet(h + `<div class="btns"><button id="cd-close">Close</button></div>`);
