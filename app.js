@@ -3,6 +3,7 @@
 // from YOUR private repo (with the token saved on this phone only) and runs the desktop's own
 // calculations inside the browser (Pyodide = Python for the web).
 
+const APP_VERSION = "2026-11-20b";               // shown in ⋮ – tells you which page the phone is running
 const PYODIDE_VERSION = "314.0.8";
 const DEFAULT_PYODIDE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`;
 const API = localStorage.getItem("bw_api") || "https://api.github.com";      // bw_api: only for testing
@@ -1005,6 +1006,7 @@ $("#btn-menu").onclick = () => {
       <div class="item tap" id="mn-forget"><div class="main"><div class="t neg">Forget this phone</div>
         <div class="small muted">Removes the token from this phone</div></div></div>
     </div>
+    <p class="muted small" style="text-align:center;margin:10px 0 0">Phone app version ${APP_VERSION}</p>
     <div class="btns"><button id="mn-close">Close</button></div>`);
   $("#mn-close").onclick = closeSheet;
   $("#mn-send").onclick = () => { closeSheet(); runCloud(true); };
