@@ -1,7 +1,7 @@
 // Makes the app installable and quick to open. It keeps a copy of the page itself and of the Python
 // engine (Pyodide, ~14 MB, downloaded once). It NEVER stores anything from GitHub: your data is fetched
 // fresh every time and only lives in memory while the app is open.
-const SHELL = "bw-shell-v8", ENGINE = "bw-pyodide-314.0.8";
+const SHELL = "bw-shell-v9", ENGINE = "bw-pyodide-314.0.8";
 const FILES = ["./", "index.html", "app.js", "style.css", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -23,7 +23,7 @@ self.addEventListener("fetch", (e) => {
       return r;
     }));
   } else if (u.origin === self.location.origin) {                                   // the page: network first
-    e.respondWith(fetch(e.request).then((r) => {
+    e.respondWith(fetch(e.request, { cache: "no-cache" }).then((r) => {   // always ask GitHub Pages for the newest
       if (r.ok) caches.open(SHELL).then((c) => c.put(e.request, r.clone()));
       return r;
     }).catch(() => caches.match(e.request)));
